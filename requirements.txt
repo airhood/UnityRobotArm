@@ -1,0 +1,11 @@
+anthropic>=0.40.0
+torch>=2.2.0
+torchvision>=0.17.0
+# CLIP: pip install git+https://github.com/openai/CLIP.git
+ftfy>=6.0
+regex
+Pillow>=10.0.0
+numpy>=1.26.0
+roboticstoolbox-python==1.1.1
+spatialmath-python==1.1.15
+scipy>=1.10.0
