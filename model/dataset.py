@@ -9,6 +9,11 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 
+# Phases where the gripper is closed (holding an object).
+# All other phases are considered open.
+_GRIPPER_CLOSED_PHASES = {"grasp", "lift", "move_to_zone"}
+
+
 class RobotArmDataset(Dataset):
     """
     Behavior-cloning dataset built from DataCollector episodes.
@@ -38,6 +43,9 @@ class RobotArmDataset(Dataset):
         self._load(Path(data_dir), split, split_ratio)
 
     def _load(self, root: Path, split: str, ratio: float):
+        # Project root = two levels above data/episodes (data/episodes → data → project)
+        project_root = root.resolve().parent.parent
+
         episodes = sorted(root.glob("episode_*"))
         cut = int(len(episodes) * ratio)
         episodes = episodes[:cut] if split == "train" else episodes[cut:]
@@ -55,14 +63,18 @@ class RobotArmDataset(Dataset):
 
             for i in range(len(states) - 1):
                 s, sn = states[i], states[i + 1]
-                if not Path(s["image_path"]).exists():
+                raw = Path(s["image_path"])
+                img_path = raw if raw.is_absolute() else project_root / raw
+                if not img_path.exists():
                     continue
+                gripper_open = 0.0 if s.get("phase") in _GRIPPER_CLOSED_PHASES else 1.0
                 self.samples.append({
-                    "image_path": s["image_path"],
+                    "image_path": str(img_path),
                     "text": label,
                     "joint_angles": s["joint_angles"],
                     "ee_position": s["ee_position"],
                     "target_position": sn["ee_position"],
+                    "gripper_open": gripper_open,
                 })
 
     def __len__(self):
@@ -77,4 +89,5 @@ class RobotArmDataset(Dataset):
             "joint_angles": torch.tensor(s["joint_angles"], dtype=torch.float32),
             "ee_position": torch.tensor(s["ee_position"], dtype=torch.float32),
             "target_position": torch.tensor(s["target_position"], dtype=torch.float32),
+            "gripper_open": torch.tensor(s["gripper_open"], dtype=torch.float32),  # 1=open, 0=closed
         }

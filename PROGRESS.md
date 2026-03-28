@@ -439,6 +439,11 @@ Inspector에서 설정 가능한 직육면체 영역:
 
 ## 8. 주요 버그 수정 이력
 
+### 8.0 Joint 동기화 acceleration 반올림 오류 (IKReceiver.cs)
+
+- **원인**: `profileAcceleration * scale` 계산 시 `RoundToInt`로 내림 반올림되는 케이스(예: `7 × 0.33 = 2.33 → 2`)에서 비례 가속도보다 낮아져 해당 joint가 다른 joint보다 늦게 도달 → arm sweep 현상
+- **수정**: reference joint의 이동 시간 T_ref를 트라페조이달 프로파일로 계산한 뒤, 각 joint에 대해 T_ref에 가장 근접한 정수 acceleration tick(floor/ceil)을 선택. 늦는 것보다 약간 빨리 도달하는 방향으로 우선
+
 ### 8.1 JSON 파싱 오류 (DataCollector.cs)
 
 - **원인**: C# interpolated string이 `CultureInfo.CurrentCulture` 사용 → 일부 시스템에서 소수점 구분자가 `,`가 되어 `"gripper_angle":-90,00}` 같은 잘못된 JSON 생성
@@ -455,22 +460,41 @@ Inspector에서 설정 가능한 직육면체 영역:
 ## 9. 완료된 작업
 
 ### Unity C# 스크립트
-- [x] `IKReceiver.cs` — `LastJointAngles` 프로퍼티 추가
+- [x] `IKReceiver.cs`
+  - `LastJointAngles` 프로퍼티 추가
+  - Joint 동기화 시스템: `profileVelocity`를 이동 각도 비율로 비례 조정해 모든 joint가 동시 도달
+  - Sync 파라미터를 `Manipulator.cs`에서 통합 관리 (`syncJoints`, `syncTriggerDelta`, `profileVelocity`, `profileAcceleration`)
+  - Acceleration 정수 반올림 오류 수정 (T_ref 기반 최적 tick 선택)
+- [x] `Manipulator.cs`
+  - Joint Profile 및 Synchronization 설정 필드 추가 (`profileVelocity`, `profileAcceleration`, `syncJoints`, `syncTriggerDelta`)
+  - EndEffector Tick 지원 추가 — `ConfigType.EndEffector` 항목을 수집해 `FixedUpdate` Tick 루프에 포함
+- [x] `EndEffector.cs` — `virtual Tick()` 추가
+- [x] `SliderGripper.cs`
+  - 크랭크-슬라이더 메커니즘 수식 완성 (degree→radian 변환, Clamp로 arcsin 안전 처리)
+  - slider2 localPosition 할당 순서 버그 수정
+  - `Tick()` override로 Manipulator FixedUpdate에 동기화 (Update 제거)
+- [x] `MaterialSet.cs` — ScriptableObject 기반 material 묶음 (NamedMaterial: material + colorName)
 - [x] `SliderGripper.cs` — `SetGripperOpen(bool)` 메서드 추가
 - [x] `AICommandServer.cs` — MOVE_TO / MOVE_REL / GRIPPER / GET_STATE
 - [x] `DataCollector.cs` — BeginEpisode / EndEpisode / SetPhase + CultureInfo.InvariantCulture 버그 수정
 - [x] `ImageServer.cs` — 포트 5008, GET 요청 → JPEG 응답
 - [x] `PickPlaceDemo.cs`
   - 런타임 오브젝트 / IK Target 동적 생성
-  - 랜덤 스폰 + 랜덤 material color
+  - **다중 오브젝트 + 다중 drop zone** 스폰 (에피소드마다 랜덤 선택)
+  - `PickablePrefab` / `DropZonePrefab`: prefab + displayNames + MaterialSet
+  - `SpawnedObject`: bottom(파지 높이 기준) + top(gizmo 위치) child 참조
+  - `SpawnedZone`: pivot(물체 놓는 면) + bottom(테이블 정렬) child 참조
+  - 물체 높이 기반 정확한 grasp/place 위치 계산 (`_objBottomOffset = endPoint.y - bottom.y`)
   - Rigidbody 물체 kinematic attach/detach
   - 테이블 동적 생성 (workspaceY 기준 상대 좌표)
   - Spawn Exclusion Zone (XZ 체크)
-  - Gizmo: 초록(Workspace) / 주황(제외 영역) / 마젠타(테이블)
+  - Renderer bounds 체크로 workspace 경계 밖으로 나가는 오브젝트 자동 위치 보정 (`ClampToBounds`)
+  - **프롬프트 다양성**: 23개 템플릿 × 오브젝트(색/형상/둘다/generic) × zone(색/형상/둘다/generic) 조합 (~2,208 가지)
+  - Gizmo: 초록(Workspace) / 주황(제외 영역) / 마젠타(테이블) / 노란 구(target 오브젝트 top) / 시안 구(target zone pivot)
   - 에피소드 자동 진행 및 DataCollector 연동
 
 ### Python 프로젝트
-- [x] `config.py`
+- [x] `config.py` (단, `TEXT_EMBED_DIM = 384` 잔여 코드 있음 — 미사용, 제거 가능)
 - [x] `utils/unity_bridge.py` — UnityBridge + ImageClient
 - [x] `utils/coordinate_transform.py`
 - [x] `utils/ik_solver.py` — IKSolver (roboticstoolbox-python, LM IK)
@@ -479,9 +503,10 @@ Inspector에서 설정 가능한 직육면체 영역:
 - [x] `collect_data.py` — IK 서버 + DataCollector 동시 실행 (단일 명령으로 완결)
 - [x] `manage_episodes.py` — 에피소드 목록 조회 / 개별·범위·전체 삭제 / 삭제 후 자동 재번호
 - [x] `data/collector_server.py` — 에피소드 자동 감지, JPEG+JSON 저장
-- [x] `data/dataset.py` — RobotArmDataset (CLIP 전처리, t→t+1 pair)
+- [x] `data/dataset.py` — RobotArmDataset (CLIP 전처리, t→t+1 pair, gripper_open label, 상대경로 지원)
 - [x] `model/architecture.py` — RobotArmModel (CLIP frozen + Action/State MLP)
-- [x] `model/train.py` — AdamW + CosineAnnealingLR, best checkpoint 저장
+- [x] `model/train.py` — AdamW + CosineAnnealingLR, best checkpoint 저장, gripper BCEWithLogitsLoss 합산
+- [x] `collector_server.py` — image_path를 프로젝트 루트 기준 상대경로(posix)로 저장
 - [x] `model/inference.py` — RobotInference
 - [x] `run_inference.py` — 텍스트 명령 추론 루프
 
@@ -522,7 +547,28 @@ python run_inference.py
 
 ---
 
-## 11. 주요 설계 결정
+## 11. 알려진 이슈 / 개선 필요 사항
+
+### 학습 코드
+
+| # | 파일 | 이슈 | 우선순위 |
+|---|------|------|---------|
+| 1 | `model/train.py`, `model/dataset.py` | **gripper_head 학습 안 됨** — `train.py`에서 `gripper_logit` 완전히 무시. `dataset.py`에도 gripper label 미포함 (states.json의 `gripper_angle` 사용 안 함). gripper 제어 필요하면 dataset에 label 추가 + BCELoss 합산 필요 | 높음 |
+| 2 | `model/dataset.py` | **image_path 절대경로** — `states.json`에 절대경로로 저장되면 환경 이전 시 전부 깨짐. 저장 시 에피소드 디렉터리 기준 상대경로로 저장하거나 로드 시 보정 필요 | 높음 |
+| 3 | `config.py` | **`TEXT_EMBED_DIM = 384` 잔여 코드** — `all-MiniLM-L6-v2` 시절 설정. 현재 CLIP 사용 기준으로 512가 맞고 실제로도 어디서도 안 씀. 혼란 유발 | 낮음 |
+| 4 | `model/dataset.py`, `model/architecture.py` | **state 입력 정규화 없음** — joint_angles(degree, ±180 범위)와 ee_position(meter, ±0.3 수준)을 그대로 concat. 스케일 차이로 state encoder 학습 불안정 가능. 표준화 권장 | 중간 |
+| 5 | `model/dataset.py` | **"return" phase 포함** — 물체 놓고 home으로 돌아가는 구간은 task 완료 후라 유의미한 학습 데이터가 아님. phase 필터링 고려 | 낮음 |
+
+### Unity 씬
+
+| # | 파일 | 이슈 |
+|---|------|------|
+| 1 | `PickPlaceDemo.cs` | `bottom`/`top`/`pivot` child 못 찾을 때 warning 없이 root로 fallback — 문제 감지 어려움 |
+| 2 | `PickPlaceDemo.cs` | `spawnSettleTime` 이내에 Rigidbody settle 안 되면 위치 틀어진 상태로 episode 진행 가능 |
+
+---
+
+## 12. 주요 설계 결정
 
 - **CLIP 학습 레이블은 영어 고정** (`"pick up the {color} {object}"`)
   → 한국어 추론 시 multilingual 인코더 교체 또는 영어로 입력 필요

@@ -76,7 +76,8 @@ def train():
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.NUM_EPOCHS)
-    loss_fn = nn.MSELoss()
+    pos_loss_fn  = nn.MSELoss()
+    grip_loss_fn = nn.BCEWithLogitsLoss()
 
     ckpt_dir = Path(config.MODEL_DIR)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -104,11 +105,12 @@ def train():
         model.train()
         total = 0.0
         for batch in train_dl:
-            images      = batch["image"].to(device)        # already CLIP-preprocessed
-            tokens      = batch["text_tokens"].to(device)  # clip.tokenize output
-            ja          = batch["joint_angles"].to(device)
-            ee          = batch["ee_position"].to(device)
-            target_pos  = batch["target_position"].to(device)
+            images       = batch["image"].to(device)        # already CLIP-preprocessed
+            tokens       = batch["text_tokens"].to(device)  # clip.tokenize output
+            ja           = batch["joint_angles"].to(device)
+            ee           = batch["ee_position"].to(device)
+            target_pos   = batch["target_position"].to(device)
+            gripper_open = batch["gripper_open"].to(device)  # (B,) float 0/1
 
             with torch.no_grad():
                 img_feat  = clip_model.encode_image(images).float()   # (B, 512)
@@ -117,8 +119,9 @@ def train():
                 img_feat  = img_feat  / img_feat.norm(dim=-1, keepdim=True)
                 text_feat = text_feat / text_feat.norm(dim=-1, keepdim=True)
 
-            delta_pred, _ = model(img_feat, text_feat, ja, ee)
-            loss = loss_fn(delta_pred, target_pos - ee)
+            delta_pred, gripper_logit = model(img_feat, text_feat, ja, ee)
+            loss = (pos_loss_fn(delta_pred, target_pos - ee)
+                    + grip_loss_fn(gripper_logit.squeeze(1), gripper_open))
 
             optimizer.zero_grad()
             loss.backward()
@@ -133,19 +136,21 @@ def train():
         val_total = 0.0
         with torch.no_grad():
             for batch in val_dl:
-                images     = batch["image"].to(device)
-                tokens     = batch["text_tokens"].to(device)
-                ja         = batch["joint_angles"].to(device)
-                ee         = batch["ee_position"].to(device)
-                target_pos = batch["target_position"].to(device)
+                images       = batch["image"].to(device)
+                tokens       = batch["text_tokens"].to(device)
+                ja           = batch["joint_angles"].to(device)
+                ee           = batch["ee_position"].to(device)
+                target_pos   = batch["target_position"].to(device)
+                gripper_open = batch["gripper_open"].to(device)
 
                 img_feat  = clip_model.encode_image(images).float()
                 text_feat = clip_model.encode_text(tokens).float()
                 img_feat  = img_feat  / img_feat.norm(dim=-1, keepdim=True)
                 text_feat = text_feat / text_feat.norm(dim=-1, keepdim=True)
 
-                delta_pred, _ = model(img_feat, text_feat, ja, ee)
-                val_total += loss_fn(delta_pred, target_pos - ee).item()
+                delta_pred, gripper_logit = model(img_feat, text_feat, ja, ee)
+                val_total += (pos_loss_fn(delta_pred, target_pos - ee)
+                              + grip_loss_fn(gripper_logit.squeeze(1), gripper_open)).item()
 
         val_loss = val_total / max(len(val_dl), 1)
         scheduler.step()

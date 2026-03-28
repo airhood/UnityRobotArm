@@ -175,7 +175,7 @@ class DataCollectorServer:
         img_path = ep["dir"] / f"frame_{idx:06d}.jpg"
         image.save(img_path, quality=85)
 
-        ep["frames"].append({**state, "frame_idx": idx, "image_path": str(img_path)})
+        ep["frames"].append({**state, "frame_idx": idx, "image_path": img_path.as_posix()})
 
         if idx % 200 == 0 and idx > 0:
             with open(ep["dir"] / "states.json", "w") as f:
