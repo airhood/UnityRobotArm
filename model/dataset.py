@@ -43,8 +43,6 @@ class RobotArmDataset(Dataset):
         self._load(Path(data_dir), split, split_ratio)
 
     def _load(self, root: Path, split: str, ratio: float):
-        # Project root = two levels above data/episodes (data/episodes → data → project)
-        project_root = root.resolve().parent.parent
 
         episodes = sorted(root.glob("episode_*"))
         cut = int(len(episodes) * ratio)
@@ -64,7 +62,8 @@ class RobotArmDataset(Dataset):
             for i in range(len(states) - 1):
                 s, sn = states[i], states[i + 1]
                 raw = Path(s["image_path"])
-                img_path = raw if raw.is_absolute() else project_root / raw
+                # 파일명만 있으면 episode 폴더 기준, 아니면 절대경로 그대로
+                img_path = ep_dir / raw.name if not raw.is_absolute() else raw
                 if not img_path.exists():
                     continue
                 gripper_open = 0.0 if s.get("phase") in _GRIPPER_CLOSED_PHASES else 1.0

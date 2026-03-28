@@ -13,6 +13,8 @@ Usage:
     python manage_episodes.py --group src --move 2-7 --to dst       # move a range to another group
     python manage_episodes.py --group src --move-all --to dst       # move all episodes to another group
     python manage_episodes.py --migrate                             # migrate legacy episode_* dirs → 'default' group
+    python manage_episodes.py --fix-paths                           # 모든 그룹의 절대경로 image_path → 상대경로 변환
+    python manage_episodes.py --group default --fix-paths           # 특정 그룹만 변환
 """
 
 import argparse
@@ -245,6 +247,53 @@ def migrate(data_dir: Path):
     print(f"\nMigration complete. {len(episodes)} episodes in group '{config.DEFAULT_GROUP}'.")
 
 
+# ── Fix paths ────────────────────────────────────────────────────────────────
+
+def _fix_states_json(states_path: Path) -> int:
+    """states.json의 image_path를 파일명만 남기도록 변환. 변경된 프레임 수 반환."""
+    with open(states_path) as f:
+        states = json.load(f)
+
+    changed = 0
+    for s in states:
+        raw = s.get("image_path", "")
+        if not raw:
+            continue
+        name = Path(raw).name
+        if raw != name:
+            s["image_path"] = name
+            changed += 1
+
+    if changed:
+        with open(states_path, "w") as f:
+            json.dump(states, f)
+    return changed
+
+
+def fix_paths(data_dir: Path, group: str | None):
+    """states.json의 image_path를 파일명만 남기도록 일괄 변환 (환경 이전 시 사용)."""
+    groups = [group] if group else [
+        p.name for p in data_dir.iterdir() if p.is_dir() and not p.name.startswith("_")
+    ]
+
+    total_frames = 0
+    for g in groups:
+        ep_dirs = sorted((data_dir / g).glob("episode_*"))
+        if not ep_dirs:
+            continue
+        with ThreadPoolExecutor(max_workers=min(16, len(ep_dirs))) as ex:
+            results = list(ex.map(
+                lambda d: _fix_states_json(d / "states.json") if (d / "states.json").exists() else 0,
+                ep_dirs
+            ))
+        changed_eps = sum(1 for r in results if r > 0)
+        changed_frames = sum(results)
+        print(f"  [{g}] {changed_eps}/{len(ep_dirs)} episodes, {changed_frames} paths updated")
+        total_frames += changed_frames
+
+    print(f"\nDone. {total_frames} image_path entries converted to filename-only.")
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -258,6 +307,7 @@ def main():
     ap.add_argument("--move-all",     action="store_true",   help="그룹 전체를 --to 그룹으로 이동")
     ap.add_argument("--to",           metavar="GROUP",       help="이동 대상 그룹 (--move / --move-all 에서 사용)")
     ap.add_argument("--migrate",      action="store_true",   help=f"legacy episode_* dirs → '{config.DEFAULT_GROUP}' group으로 migration")
+    ap.add_argument("--fix-paths",    action="store_true",   help="states.json의 절대경로 image_path를 상대경로로 변환 (환경 이전 시 사용)")
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -267,6 +317,10 @@ def main():
 
     if args.migrate:
         migrate(data_dir)
+        return
+
+    if args.fix_paths:
+        fix_paths(data_dir, args.group)
         return
 
     if args.group:
