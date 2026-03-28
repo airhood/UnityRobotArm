@@ -7,13 +7,15 @@ Episode labels and boundaries are sent from Unity via DataCollector as JSON.
 
 Usage:
     python collect_data.py
-    python collect_data.py --save-dir data/episodes
+    python collect_data.py --group my_group
+    python collect_data.py --save-dir data/episodes --group my_group
 """
 
 import argparse
 import signal
 import sys
 import time
+from pathlib import Path
 
 import config
 from collector_server import DataCollectorServer
@@ -28,7 +30,10 @@ def main():
     ap.add_argument("--host",     default=config.DATA_COLLECTOR_HOST)
     ap.add_argument("--port",     type=int, default=config.DATA_COLLECTOR_PORT)
     ap.add_argument("--save-dir", default=config.DATA_DIR)
+    ap.add_argument("--group",    default=config.DEFAULT_GROUP, help="episode group name (default: '%(default)s')")
     args = ap.parse_args()
+
+    args.save_dir = str(Path(args.save_dir) / args.group)
 
     ik_server = start_ik_server()
 
@@ -55,6 +60,7 @@ def main():
 
     print(f"\nIK server started on port {config.IK_SERVER_PORT}")
     print(f"Data collection server started on port {args.port}")
+    print(f"Saving to group: '{args.group}' → {args.save_dir}")
     print("Unity PickPlaceDemo will manage episodes automatically.")
     print("Press Ctrl+C to stop.\n")
 

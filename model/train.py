@@ -2,9 +2,10 @@
 Behavior-cloning training for the CLIP-based robot arm model.
 
 Usage:
-    python -m model.train                          # train from scratch
-    python -m model.train --resume                 # resume from best_model.pt
-    python -m model.train --resume path/to/ckpt.pt # resume from specific checkpoint
+    python -m model.train                               # train on default group
+    python -m model.train --group my_group              # train on specific group
+    python -m model.train --resume                      # resume from best_model.pt
+    python -m model.train --resume path/to/ckpt.pt      # resume from specific checkpoint
 """
 
 import argparse
@@ -26,10 +27,13 @@ logger = setup_logging("train")
 
 def train():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--group",  default=config.DEFAULT_GROUP, help="episode group to train on (default: '%(default)s')")
     ap.add_argument("--resume", nargs="?", const=True, default=False,
                     metavar="CHECKPOINT",
                     help="resume from checkpoint (default: best_model.pt)")
     args = ap.parse_args()
+
+    data_dir = str(Path(config.DATA_DIR) / args.group)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Device: {device}")
@@ -43,14 +47,14 @@ def train():
 
     # ── Dataset ────────────────────────────────────────────────────────────
     train_ds = RobotArmDataset(
-        config.DATA_DIR, config.IMAGE_SIZE, "train",
+        data_dir, config.IMAGE_SIZE, "train",
         clip_preprocess=clip_preprocess,
     )
     val_ds = RobotArmDataset(
-        config.DATA_DIR, config.IMAGE_SIZE, "val",
+        data_dir, config.IMAGE_SIZE, "val",
         clip_preprocess=clip_preprocess,
     )
-    logger.info(f"Train: {len(train_ds)}  |  Val: {len(val_ds)}")
+    logger.info(f"Group: {args.group}  |  Train: {len(train_ds)}  |  Val: {len(val_ds)}")
 
     if len(train_ds) == 0:
         logger.error("No training data. Run collect_data.py first.")

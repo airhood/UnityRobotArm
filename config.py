@@ -11,7 +11,8 @@ DATA_COLLECTOR_PORT = 5006     # DataCollectorServer (Python) ← Unity connects
 IMAGE_SERVER_PORT   = 5008     # ImageServer.cs in Unity (camera frame requests during inference)
 
 # ── Paths ──────────────────────────────────────────────────────────────────
-DATA_DIR = "data/episodes"
+DATA_DIR      = "data/episodes"
+DEFAULT_GROUP = "default"
 MODEL_DIR = "model/checkpoints"
 
 # ── Model hyperparameters ──────────────────────────────────────────────────

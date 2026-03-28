@@ -54,15 +54,25 @@ UnityRobotArm/                    ← Python 프로젝트
 │   ├── train.py                  ← 학습 루프
 │   └── inference.py              ← RobotInference
 └── data/
-    └── episodes/                 ← 수집된 에피소드 데이터
+    └── episodes/                 ← 수집된 에피소드 데이터 (그룹별 관리)
+        ├── default/              ← 기본 그룹
+        │   ├── episode_0000/
+        │   └── ...
+        └── {group_name}/         ← 추가 그룹 (--group 인자로 지정)
 
 UnityRobotArm-Sim/Assets/Scripts/   ← Unity C# 스크립트
+├── SimCore.cs                    ← Singleton tick dispatcher (FixedUpdate, 우선순위 기반 콜백 등록)
+├── SimLoop.cs                    ← stub (SimCore로 rename됨)
+├── Manipulator.cs                ← 하드웨어 레이어 (actuator 관리, tick 배분) — ControlMode 없음
+├── ManipulatorEditor.cs          ← Custom Inspector
+├── SBCController.cs              ← Dynamixel 프로파일 설정 + Joint 동기화 + SetPosition 호출
+├── IKReceiver.cs                 ← TCP 통신만 담당 (x,y,z 전송 → 관절각 수신)
+├── ManualManipulatorController.cs ← Inspector 슬라이더로 수동 관절 제어
 ├── AICommandServer.cs            ← TCP 서버 (포트 5007), Python 명령 수신
 ├── DataCollector.cs              ← TCP 클라이언트, 학습 데이터 전송 (포트 5006)
 ├── ImageServer.cs                ← TCP 서버 (포트 5008), 카메라 프레임 제공
 ├── PickPlaceDemo.cs              ← 자동 pick-and-place 시연 및 데이터 수집 제어
-├── IKReceiver.cs                 ← IK 솔버 연결 (포트 5005)
-└── SliderGripper.cs              ← 그리퍼 제어
+└── SliderGripper.cs              ← 그리퍼 제어 (EndEffector 서브클래스)
 ```
 
 ---
@@ -439,10 +449,11 @@ Inspector에서 설정 가능한 직육면체 영역:
 
 ## 8. 주요 버그 수정 이력
 
-### 8.0 Joint 동기화 acceleration 반올림 오류 (IKReceiver.cs)
+### 8.0 Joint 동기화 acceleration 반올림 오류 (→ SBCController.cs로 이동)
 
 - **원인**: `profileAcceleration * scale` 계산 시 `RoundToInt`로 내림 반올림되는 케이스(예: `7 × 0.33 = 2.33 → 2`)에서 비례 가속도보다 낮아져 해당 joint가 다른 joint보다 늦게 도달 → arm sweep 현상
 - **수정**: reference joint의 이동 시간 T_ref를 트라페조이달 프로파일로 계산한 뒤, 각 joint에 대해 T_ref에 가장 근접한 정수 acceleration tick(floor/ceil)을 선택. 늦는 것보다 약간 빨리 도달하는 방향으로 우선
+- **리팩토링**: 해당 로직은 아키텍처 분리 이후 `SBCController.cs`로 이전됨 (원래 `IKReceiver.cs`에 있었음)
 
 ### 8.1 JSON 파싱 오류 (DataCollector.cs)
 
@@ -460,14 +471,30 @@ Inspector에서 설정 가능한 직육면체 영역:
 ## 9. 완료된 작업
 
 ### Unity C# 스크립트
-- [x] `IKReceiver.cs`
-  - `LastJointAngles` 프로퍼티 추가
-  - Joint 동기화 시스템: `profileVelocity`를 이동 각도 비율로 비례 조정해 모든 joint가 동시 도달
-  - Sync 파라미터를 `Manipulator.cs`에서 통합 관리 (`syncJoints`, `syncTriggerDelta`, `profileVelocity`, `profileAcceleration`)
-  - Acceleration 정수 반올림 오류 수정 (T_ref 기반 최적 tick 선택)
-- [x] `Manipulator.cs`
-  - Joint Profile 및 Synchronization 설정 필드 추가 (`profileVelocity`, `profileAcceleration`, `syncJoints`, `syncTriggerDelta`)
-  - EndEffector Tick 지원 추가 — `ConfigType.EndEffector` 항목을 수집해 `FixedUpdate` Tick 루프에 포함
+
+#### 아키텍처 레이어 분리 (리팩토링)
+- [x] `SimCore.cs` (신규)
+  - Singleton tick dispatcher — priority 기반 콜백 등록/해제
+  - `Register(Action<float> tick, int priority)` / `Unregister()`
+  - Script Execution Order: SimCore=-50, Actuator=-20
+- [x] `SimLoop.cs` — stub으로 유지 (`// Renamed to SimCore.cs`)
+- [x] `Manipulator.cs` — ControlMode 제거, 순수 하드웨어 레이어로 단순화
+  - `ControlMode` enum 및 `controlMode` 필드 제거
+  - `manualAngles`, `InitializeManualMode()`, `SetManualAngle()`, `GetManualAngle()` 제거
+  - `Update()`, `OnGUI()` (수동 슬라이더 UI) 제거
+  - EndEffector Tick 지원 — `ConfigType.EndEffector` 항목을 SimCore Tick 루프에 포함
+- [x] `SBCController.cs` (신규)
+  - Dynamixel 프로파일 설정 (`profileVelocity`, `profileAcceleration`)
+  - Joint 동기화 시스템 (IKReceiver.cs에서 이전): T_ref 기반 최적 acceleration tick 선택
+  - `IKReceiver.LastJointAngles` 읽어 `actuatorInstances[i].SetPosition()` 호출
+  - SimCore priority=0 등록 (Manipulator priority=10보다 먼저)
+- [x] `IKReceiver.cs` — TCP 통신 전담으로 단순화
+  - `LastJointAngles` 프로퍼티 유지
+  - `Update()`: `x,y,z` 3값만 전송 (ControlMode 체크, pitch 없음)
+  - Joint 동기화 및 SetPosition 로직은 SBCController로 이전됨
+- [x] `ManualManipulatorController.cs` (신규)
+  - Inspector 슬라이더로 수동 관절 제어
+  - `Update()`: 슬라이더 값 → `actuatorInstances[i].SetPosition()` 호출
 - [x] `EndEffector.cs` — `virtual Tick()` 추가
 - [x] `SliderGripper.cs`
   - 크랭크-슬라이더 메커니즘 수식 완성 (degree→radian 변환, Clamp로 arcsin 안전 처리)
@@ -494,19 +521,18 @@ Inspector에서 설정 가능한 직육면체 영역:
   - 에피소드 자동 진행 및 DataCollector 연동
 
 ### Python 프로젝트
-- [x] `config.py` (단, `TEXT_EMBED_DIM = 384` 잔여 코드 있음 — 미사용, 제거 가능)
+- [x] `config.py` — `DEFAULT_GROUP = "default"` 추가 (단, `TEXT_EMBED_DIM = 384` 잔여 코드 있음 — 미사용)
 - [x] `utils/unity_bridge.py` — UnityBridge + ImageClient
 - [x] `utils/coordinate_transform.py`
 - [x] `utils/ik_solver.py` — IKSolver (roboticstoolbox-python, LM IK)
 - [x] `utils/ik_server.py` — IKServer 클래스 (TCP, 포트 5005)
 - [x] `run_ik_server.py` — `start()` 함수 + 단독 실행 진입점
-- [x] `collect_data.py` — IK 서버 + DataCollector 동시 실행 (단일 명령으로 완결)
-- [x] `manage_episodes.py` — 에피소드 목록 조회 / 개별·범위·전체 삭제 / 삭제 후 자동 재번호
-- [x] `data/collector_server.py` — 에피소드 자동 감지, JPEG+JSON 저장
-- [x] `data/dataset.py` — RobotArmDataset (CLIP 전처리, t→t+1 pair, gripper_open label, 상대경로 지원)
+- [x] `collect_data.py` — IK 서버 + DataCollector 동시 실행, `--group` 지원
+- [x] `manage_episodes.py` — 그룹 기반 에피소드 관리, 병렬 처리, migration
+- [x] `collector_server.py` — 에피소드 자동 감지, JPEG+JSON 저장
+- [x] `model/dataset.py` — RobotArmDataset (CLIP 전처리, t→t+1 pair, gripper_open label, 상대경로 지원)
 - [x] `model/architecture.py` — RobotArmModel (CLIP frozen + Action/State MLP)
-- [x] `model/train.py` — AdamW + CosineAnnealingLR, best checkpoint 저장, gripper BCEWithLogitsLoss 합산
-- [x] `collector_server.py` — image_path를 프로젝트 루트 기준 상대경로(posix)로 저장
+- [x] `model/train.py` — AdamW + CosineAnnealingLR, best checkpoint 저장, gripper BCEWithLogitsLoss 합산, `--group` 지원
 - [x] `model/inference.py` — RobotInference
 - [x] `run_inference.py` — 텍스트 명령 추론 루프
 
@@ -529,17 +555,37 @@ pip install git+https://github.com/openai/CLIP.git
 
 **2. 데이터 수집**
 ```bash
-python collect_data.py   # IK 서버(5005) + 수집 서버(5006) 동시 실행
+python collect_data.py                  # default 그룹으로 수집
+python collect_data.py --group my_group # 특정 그룹으로 수집
 # Unity Play 모드 실행 → PickPlaceDemo 자동 진행
 ```
 
-**3. 모델 학습**
+**3. 에피소드 관리**
 ```bash
-python -m model.train
-# 체크포인트: model/checkpoints/best_model.pt
+python manage_episodes.py                                       # 전체 그룹 목록
+python manage_episodes.py --group default                       # 그룹 내 에피소드 목록
+python manage_episodes.py --group default --delete 0 3 5        # 특정 에피소드 삭제
+python manage_episodes.py --group default --delete 2-7          # 범위 삭제
+python manage_episodes.py --group default --delete-all          # 그룹 내 전체 삭제
+python manage_episodes.py --group default --delete-group        # 그룹 폴더 자체 삭제
+python manage_episodes.py --delete-all                          # 모든 그룹 삭제
+python manage_episodes.py --group src --move 0 3 5 --to dst     # 특정 에피소드 이동
+python manage_episodes.py --group src --move 2-7 --to dst       # 범위 이동
+python manage_episodes.py --group src --move-all --to dst       # 그룹 전체 이동
+python manage_episodes.py --migrate                             # 기존 episode_* → default 그룹으로 migration
 ```
 
-**4. 추론 테스트**
+**4. 모델 학습**
+```bash
+python -m model.train                               # default 그룹으로 학습
+python -m model.train --group my_group              # 특정 그룹으로 학습
+python -m model.train --resume                      # best_model.pt에서 이어서 학습
+python -m model.train --resume path/to/ckpt.pt      # 특정 체크포인트에서 이어서 학습
+# 체크포인트: model/checkpoints/best_model.pt (val loss 최저)
+#             model/checkpoints/epoch_XXXX.pt  (10 epoch마다)
+```
+
+**5. 추론 테스트**
 ```bash
 python run_inference.py
 # > pick up the red cube
@@ -565,6 +611,14 @@ python run_inference.py
 |---|------|------|
 | 1 | `PickPlaceDemo.cs` | `bottom`/`top`/`pivot` child 못 찾을 때 warning 없이 root로 fallback — 문제 감지 어려움 |
 | 2 | `PickPlaceDemo.cs` | `spawnSettleTime` 이내에 Rigidbody settle 안 되면 위치 틀어진 상태로 episode 진행 가능 |
+| 3 | 씬 설정 | `SimCore` 컴포넌트를 씬에 추가해야 함 (빈 GameObject에 부착). 없으면 "SimCore not found" 오류 + Manipulator/SBCController 미작동. Script Execution Order: SimCore=-50, Actuator=-20 |
+
+### IK / 제어
+
+| # | 파일 | 이슈 |
+|---|------|------|
+| 1 | `ik_solver.py` | **Pitch constraint 미구현** — 물체를 바닥에 놓을 때 end-effector 방향(pitch) 보존 시도했으나 실패. 원인: (1) FK rotation matrix에서 Rz 추출 시 `arctan2(R[1,0], R[0,0])`는 Joint[4]=Rx가 있을 때 잘못된 값 반환, (2) warm-start로 constrained 해의 비정상 configuration이 다음 unconstrained IK 초기값으로 오염됨. 미해결 |
+| 2 | `IKReceiver.cs`, `ik_solver.py` | **IK FK endpoint = endPoint 기준** — IK 솔버의 FK 끝점이 Unity의 `endPoint` Transform에 대응됨. `gripperPivot`을 IK 기준점으로 전환 시도했으나 동작 불안정으로 revert. 전환하려면 `ik_solver.py`의 `l5` 링크 길이를 Joint[4]→gripperPivot 실측값으로 수정 필요 |
 
 ---
 
@@ -577,3 +631,5 @@ python run_inference.py
 - **IK 솔버 독립 복사**: `VISTA-Manip/manipulator-sim`은 참조 전용 — 수정 금지, 필요한 코드는 복사해서 사용
 - **단일 명령 데이터 수집**: `python collect_data.py` 하나로 IK 서버 + 데이터 수집 서버 동시 기동
 - **Behavior Cloning 학습 타겟**: 절대 위치가 아닌 Δpos를 예측 → 임의의 시작 위치에서도 일반화 가능
+- **아키텍처 레이어 분리**: SimCore(tick 배분) → Manipulator(하드웨어) → SBCController+IKReceiver(제어). Manipulator는 ControlMode 없이 순수 하드웨어 레이어. 외부 컴포넌트(SBCController, ManualManipulatorController 등)가 제어 방식 결정
+- **IK는 매 프레임 호출이 아님**: waypoint 도달 시 한 번 호출. IKReceiver는 target 위치 변화 감지 시에만 전송 (`positionThreshold`, `sendInterval` 조건)
