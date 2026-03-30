@@ -14,6 +14,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 import clip  # pip install git+https://github.com/openai/CLIP.git
 
@@ -60,13 +61,14 @@ def train():
         logger.error("No training data. Run collect_data.py first.")
         return
 
+    num_workers = min(4, 2 if device.type == "cuda" else 0)
     train_dl = DataLoader(
         train_ds, batch_size=config.BATCH_SIZE, shuffle=True,
-        num_workers=4, pin_memory=True,
+        num_workers=num_workers, pin_memory=(device.type == "cuda"),
     )
     val_dl = DataLoader(
         val_ds, batch_size=config.BATCH_SIZE, shuffle=False,
-        num_workers=4, pin_memory=True,
+        num_workers=num_workers, pin_memory=(device.type == "cuda"),
     )
 
     # ── Model (only Action MLP + State MLP are trained) ────────────────────
@@ -104,11 +106,13 @@ def train():
         else:
             logger.warning(f"Checkpoint not found: {ckpt_path} — starting from scratch")
 
-    for epoch in range(start_epoch, config.NUM_EPOCHS + 1):
+    epoch_bar = tqdm(range(start_epoch, config.NUM_EPOCHS + 1), desc="Epochs")
+    for epoch in epoch_bar:
         # ── Train ──────────────────────────────────────────────────────────
         model.train()
         total = 0.0
-        for batch in train_dl:
+        train_bar = tqdm(train_dl, desc=f"  Train {epoch}/{config.NUM_EPOCHS}", leave=False)
+        for batch in train_bar:
             images       = batch["image"].to(device)        # already CLIP-preprocessed
             tokens       = batch["text_tokens"].to(device)  # clip.tokenize output
             ja           = batch["joint_angles"].to(device)
@@ -132,6 +136,7 @@ def train():
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             total += loss.item()
+            train_bar.set_postfix(loss=f"{loss.item():.4f}")
 
         train_loss = total / len(train_dl)
 
@@ -139,7 +144,7 @@ def train():
         model.eval()
         val_total = 0.0
         with torch.no_grad():
-            for batch in val_dl:
+            for batch in tqdm(val_dl, desc=f"  Val   {epoch}/{config.NUM_EPOCHS}", leave=False):
                 images       = batch["image"].to(device)
                 tokens       = batch["text_tokens"].to(device)
                 ja           = batch["joint_angles"].to(device)
@@ -159,6 +164,7 @@ def train():
         val_loss = val_total / max(len(val_dl), 1)
         scheduler.step()
 
+        epoch_bar.set_postfix(train=f"{train_loss:.4f}", val=f"{val_loss:.4f}")
         logger.info(
             f"Epoch {epoch:3d}/{config.NUM_EPOCHS} | "
             f"train={train_loss:.6f} | val={val_loss:.6f}"
