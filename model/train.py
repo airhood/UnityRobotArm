@@ -14,7 +14,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 import clip  # pip install git+https://github.com/openai/CLIP.git
 
@@ -106,13 +106,12 @@ def train():
         else:
             logger.warning(f"Checkpoint not found: {ckpt_path} — starting from scratch")
 
-    epoch_bar = tqdm(range(start_epoch, config.NUM_EPOCHS + 1), desc="Epochs")
+    epoch_bar = tqdm(range(start_epoch, config.NUM_EPOCHS + 1), desc="Epochs", unit="ep")
     for epoch in epoch_bar:
         # ── Train ──────────────────────────────────────────────────────────
         model.train()
         total = 0.0
-        train_bar = tqdm(train_dl, desc=f"  Train {epoch}/{config.NUM_EPOCHS}", leave=False)
-        for batch in train_bar:
+        for batch in train_dl:
             images       = batch["image"].to(device)        # already CLIP-preprocessed
             tokens       = batch["text_tokens"].to(device)  # clip.tokenize output
             ja           = batch["joint_angles"].to(device)
@@ -136,7 +135,6 @@ def train():
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             total += loss.item()
-            train_bar.set_postfix(loss=f"{loss.item():.4f}")
 
         train_loss = total / len(train_dl)
 
@@ -144,7 +142,7 @@ def train():
         model.eval()
         val_total = 0.0
         with torch.no_grad():
-            for batch in tqdm(val_dl, desc=f"  Val   {epoch}/{config.NUM_EPOCHS}", leave=False):
+            for batch in val_dl:
                 images       = batch["image"].to(device)
                 tokens       = batch["text_tokens"].to(device)
                 ja           = batch["joint_angles"].to(device)
