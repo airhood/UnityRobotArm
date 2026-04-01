@@ -38,17 +38,20 @@ class RobotArmModel(nn.Module):
         self.state_encoder = nn.Sequential(
             nn.Linear(joint_dim + 3, 64),
             nn.ReLU(),
+            nn.Dropout(0.2),
             nn.Linear(64, 64),
             nn.ReLU(),
+            nn.Dropout(0.2),
         )
 
         # Action MLP: fused vision-language (512) + state (64) → hidden
         self.action_mlp = nn.Sequential(
             nn.Linear(clip_dim + 64, hidden_dim),
             nn.ReLU(),
-            nn.Dropout(0.1),
+            nn.Dropout(0.3),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(0.3),
         )
 
         self.position_head = nn.Linear(hidden_dim, action_dim)

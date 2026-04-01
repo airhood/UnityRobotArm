@@ -28,10 +28,12 @@ logger = setup_logging("train")
 
 def train():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--group",  default=config.DEFAULT_GROUP, help="episode group to train on (default: '%(default)s')")
-    ap.add_argument("--resume", nargs="?", const=True, default=False,
+    ap.add_argument("--group",   default=config.DEFAULT_GROUP, help="episode group to train on (default: '%(default)s')")
+    ap.add_argument("--resume",  nargs="?", const=True, default=False,
                     metavar="CHECKPOINT",
                     help="resume from checkpoint (default: best_model.pt)")
+    ap.add_argument("--patience", type=int, default=10,
+                    help="early stopping patience in epochs (default: 10)")
     args = ap.parse_args()
 
     data_dir = str(Path(config.DATA_DIR) / args.group)
@@ -89,6 +91,7 @@ def train():
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     best_val = float("inf")
     start_epoch = 1
+    no_improve = 0
 
     # ── Resume ─────────────────────────────────────────────────────────────
     if args.resume:
@@ -170,6 +173,7 @@ def train():
 
         if val_loss < best_val:
             best_val = val_loss
+            no_improve = 0
             torch.save(
                 {
                     "epoch": epoch,
@@ -180,6 +184,12 @@ def train():
                 },
                 ckpt_dir / "best_model.pt",
             )
+            logger.info(f"  → Best model saved (val={best_val:.6f})")
+        else:
+            no_improve += 1
+            if no_improve >= args.patience:
+                logger.info(f"Early stopping at epoch {epoch} (no improvement for {args.patience} epochs)")
+                break
 
         if epoch % 10 == 0:
             torch.save(

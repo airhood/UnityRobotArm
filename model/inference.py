@@ -12,6 +12,7 @@ from PIL import Image
 
 import config
 from model.architecture import RobotArmModel
+from model.dataset import _EE_CENTER, _EE_SCALE, _JOINT_SCALE
 
 logger = logging.getLogger(__name__)
 
@@ -67,15 +68,20 @@ class RobotInference:
             img_feat  = img_feat  / img_feat.norm(dim=-1, keepdim=True)
             text_feat = text_feat / text_feat.norm(dim=-1, keepdim=True)
 
-            ja = torch.tensor([joint_angles], dtype=torch.float32, device=self.device)
-            ee = torch.tensor([ee_position],  dtype=torch.float32, device=self.device)
+            ee_raw = torch.tensor(ee_position, dtype=torch.float32)
+            ja = (torch.tensor(joint_angles, dtype=torch.float32) / _JOINT_SCALE).unsqueeze(0).to(self.device)
+            ee = ((ee_raw - _EE_CENTER) / _EE_SCALE).unsqueeze(0).to(self.device)
 
-            delta, gripper_logit = self.model(img_feat, text_feat, ja, ee)
-            delta = delta.squeeze(0).cpu().tolist()
+            delta_norm, gripper_logit = self.model(img_feat, text_feat, ja, ee)
+            # denormalize: delta in normalized space → meters
+            delta_norm = delta_norm.squeeze(0).cpu()
+            target_norm = ee.squeeze(0).cpu() + delta_norm
+            target = (target_norm * _EE_SCALE + _EE_CENTER).tolist()
+            delta = [target[i] - ee_position[i] for i in range(3)]
             gripper_open = torch.sigmoid(gripper_logit).item() > 0.5
 
         return {
             "delta_position":  delta,
-            "target_position": [ee_position[i] + delta[i] for i in range(3)],
+            "target_position": target,
             "gripper_open":    gripper_open,
         }

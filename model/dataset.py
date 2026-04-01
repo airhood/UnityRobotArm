@@ -8,10 +8,24 @@ import torchvision.transforms as T
 from PIL import Image
 from torch.utils.data import Dataset
 
+import config
 
 # Phases where the gripper is closed (holding an object).
 # All other phases are considered open.
 _GRIPPER_CLOSED_PHASES = {"grasp", "lift", "move_to_zone"}
+
+# State normalization constants
+_JOINT_SCALE = 180.0  # joint angles in degrees → [-1, 1]
+_EE_CENTER = torch.tensor([
+    (config.WORKSPACE["x"][0] + config.WORKSPACE["x"][1]) / 2,
+    (config.WORKSPACE["y"][0] + config.WORKSPACE["y"][1]) / 2,
+    (config.WORKSPACE["z"][0] + config.WORKSPACE["z"][1]) / 2,
+])
+_EE_SCALE = torch.tensor([
+    (config.WORKSPACE["x"][1] - config.WORKSPACE["x"][0]) / 2,
+    (config.WORKSPACE["y"][1] - config.WORKSPACE["y"][0]) / 2,
+    (config.WORKSPACE["z"][1] - config.WORKSPACE["z"][0]) / 2,
+])
 
 
 class RobotArmDataset(Dataset):
@@ -85,8 +99,8 @@ class RobotArmDataset(Dataset):
         return {
             "image": image,
             "text_tokens": clip.tokenize([s["text"]], truncate=True).squeeze(0),  # (77,)
-            "joint_angles": torch.tensor(s["joint_angles"], dtype=torch.float32),
-            "ee_position": torch.tensor(s["ee_position"], dtype=torch.float32),
-            "target_position": torch.tensor(s["target_position"], dtype=torch.float32),
+            "joint_angles": torch.tensor(s["joint_angles"], dtype=torch.float32) / _JOINT_SCALE,
+            "ee_position": (torch.tensor(s["ee_position"], dtype=torch.float32) - _EE_CENTER) / _EE_SCALE,
+            "target_position": (torch.tensor(s["target_position"], dtype=torch.float32) - _EE_CENTER) / _EE_SCALE,
             "gripper_open": torch.tensor(s["gripper_open"], dtype=torch.float32),  # 1=open, 0=closed
         }
